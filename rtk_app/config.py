@@ -459,6 +459,9 @@ RATE_LIMIT_PER_MIN = _env_int("RTK_RATE_LIMIT_PER_MIN", 10)
 LOCAL_PARALLEL = _env_int("RTK_LOCAL_PARALLEL", 1)
 # Заголовок-ключ движка (--api-key). Пусто — без ключа.
 # На VPS задаётся: RTK_LOCAL_API_KEY=... (хранить в файле с правами 600).
+#
+# ВНИМАНИЕ: из-за того, что _env_* определены НИЖЕ по файлу, здесь мы читаем
+# ENV напрямую через os.environ (та же семантика: пусто -> значение по умолч.).
 # --- ЛОКАЛЬНАЯ МОДЕЛЬ (llama.cpp / Ollama / LM Studio) ---
 # Блок подключения ЛОКАЛЬНОЙ модели: пользователь указывает КОРЕНЬ папки с
 # движком и моделями (напр. E:\Models\llama). Сервер:
@@ -512,3 +515,17 @@ LOCAL_TIMEOUT = 180
 LOCAL_START_TIMEOUT = 180
 # Сколько свободной видеопамяти (МБ) оставлять в запасе при автоподборе -ngl.
 LOCAL_VRAM_RESERVE_MB = 512
+
+# --- Переопределение локальных параметров из ENV (для VPS, §4 ТЗ) ---
+# На VPS локальный llama-server обычно запущен ОТДЕЛЬНЫМ systemd-сервисом,
+# а app-сервис подключается к нему по URL с общим --api-key. Эти переменные
+# позволяют задать всё без правки файлов:
+#   RTK_LOCAL_HOST=127.0.0.1  RTK_LOCAL_PORT=8080
+#   RTK_LOCAL_API_KEY=...     (должен совпадать с ключом llama-server)
+#   RTK_LOCAL_LABEL=Local     RTK_LOCAL_CTX=4096  RTK_LOCAL_TIMEOUT=300
+LOCAL_HOST = _env_str("RTK_LOCAL_HOST", LOCAL_HOST)
+LOCAL_PORT = _env_int("RTK_LOCAL_PORT", LOCAL_PORT)
+LOCAL_CTX = _env_int("RTK_LOCAL_CTX", LOCAL_CTX)
+LOCAL_API_KEY = _env_str("RTK_LOCAL_API_KEY", LOCAL_API_KEY)
+LOCAL_LABEL = _env_str("RTK_LOCAL_LABEL", LOCAL_LABEL)
+LOCAL_TIMEOUT = _env_int("RTK_LOCAL_TIMEOUT", LOCAL_TIMEOUT)

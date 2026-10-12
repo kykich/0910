@@ -457,10 +457,18 @@ class LocalServerManager:
 
     @staticmethod
     def _probe_ready(url):
-        """Проверяет готовность сервера: GET <url>/models (OpenAI-совместимо)."""
+        """Проверяет готовность сервера: GET <url>/models (OpenAI-совместимо).
+
+        Если задан api-key (config.LOCAL_API_KEY, на VPS — RTK_LOCAL_API_KEY),
+        отправляем его заголовком Authorization: Bearer, иначе защищённый
+        llama-server вернёт 401 и сервер будет ошибочно считаться «не готов».
+        """
         try:
             req = urllib.request.Request(url.rstrip("/") + "/models",
                                          method="GET")
+            key = str(getattr(config, "LOCAL_API_KEY", "") or "").strip()
+            if key:
+                req.add_header("Authorization", "Bearer " + key)
             with urllib.request.urlopen(req, timeout=3) as resp:
                 return resp.status == 200
         except Exception:
@@ -498,7 +506,13 @@ class LocalServerManager:
             return True
 
     def status(self, host=None, port=None):
-        """Текущий статус: запущен ли, URL, PID, ответ сервера (models)."""
+        """Текущий статус: запущен ли, URL, PID, ответ сервера (models).
+
+        На VPS llama-server может быть запущен ОТДЕЛЬНЫМ systemd-сервисом (не
+        нашим подпроцессом). Поэтому готовность определяем не только по
+        собственному процессу, но и пробой /v1/models по URL — тогда app
+        подхватит внешний сервер и подключится к нему.
+        """
         running = self.is_running()
         st = {"running": running, "pid": (self._proc.pid if running else None),
               "url": None, "ready": False, "models": [], "error": None}
@@ -507,10 +521,13 @@ class LocalServerManager:
         h = host or params.get("host") or config.LOCAL_HOST
         p = port or params.get("port") or config.LOCAL_PORT
         st["url"] = server_url(h, p)
-        if running:
+        # Готовность — по факту ответа сервера (свой или внешний процесс).
+        if running or bool(settings.get("enabled")):
             st["ready"] = self._probe_ready(st["url"])
             if st["ready"]:
                 st["models"] = self._list_server_models(st["url"])
+                # Внешний сервер (запущен не нами) — тоже считаем «работающим».
+                st["running"] = True
         return st
 
     @staticmethod
@@ -519,6 +536,9 @@ class LocalServerManager:
         try:
             req = urllib.request.Request(url.rstrip("/") + "/models",
                                          method="GET")
+            key = str(getattr(config, "LOCAL_API_KEY", "") or "").strip()
+            if key:
+                req.add_header("Authorization", "Bearer " + key)
             with urllib.request.urlopen(req, timeout=5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             items = data.get("data") or []
