@@ -241,8 +241,11 @@ def _local_status_payload():
     """
     mgr = _local_manager()
     settings = mgr.load_settings()
-    running = mgr.is_running()
-    runtime = mgr.status() if running else None
+    # Всегда опрашиваем status(): на VPS llama-server может быть запущен
+    # ВНЕШНИМ systemd-сервисом (не нашим подпроцессом), и status() уже
+    # определяет готовность по пробе /v1/models.
+    runtime = mgr.status()
+    running = bool(runtime.get("running"))
     scan = _ServerState.local_scan or {}
     return {
         "ok": True,
