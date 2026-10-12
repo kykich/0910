@@ -373,6 +373,92 @@ RAG_IMAGE_FORMAT = "png"
 RAG_FRAGMENTS_MAX = 4
 
 
+# ===========================================================================
+# РАЗВЁРТЫВАНИЕ НА VPS (серверный режим). См. docs/vps-llm-service.md.
+# ===========================================================================
+# Все параметры ниже читаются из переменных окружения (с безопасными
+# значениями по умолчанию), чтобы один и тот же код работал и локально (как
+# есть, по умолчанию), и на VPS под nginx, БЕЗ правки файлов.
+#
+# Пример (за nginx, как в ТЗ):
+#   RTK_HOST=127.0.0.1            # app слушает loopback, наружу его прячет nginx
+#   RTK_PORT=8000                 # внутренний порт app (nginx проксирует на него)
+#   RTK_MAX_SESSIONS=2            # не более 2 активных сессий
+#   RTK_BEHIND_PROXY=1            # доверять X-Forwarded-For (IP клиента)
+#   RTK_OPEN_BROWSER=0            # на сервере браузер не открываем
+
+
+def _env_str(name, default):
+    """Строковая ENV-переменная (пустая строка -> значение по умолчанию)."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    val = val.strip()
+    return val if val else default
+
+
+def _env_int(name, default):
+    """Целочисленная ENV-переменная (некорректное значение -> по умолчанию)."""
+    val = os.environ.get(name)
+    if val is None or str(val).strip() == "":
+        return default
+    try:
+        return int(str(val).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name, default):
+    """Булева ENV-переменная: 1/true/yes/on (вкл.), 0/false/no/off (выкл.)."""
+    val = os.environ.get(name)
+    if val is None or str(val).strip() == "":
+        return default
+    return str(val).strip().lower() in ("1", "true", "yes", "on", "да")
+
+
+# --- Сеть app-сервиса ---
+# По умолчанию (локально) — как раньше: 127.0.0.1:8000. На VPS обычно
+# RTK_HOST=127.0.0.1 (за nginx) или 0.0.0.0 (без прокси).
+WEB_HOST = _env_str("RTK_HOST", WEB_HOST)
+WEB_PORT = _env_int("RTK_PORT", WEB_PORT)
+# Открывать ли страницу в браузере при старте (на сервере — нет).
+OPEN_BROWSER = _env_bool("RTK_OPEN_BROWSER", True)
+# Доверять ли заголовкам прокси (X-Forwarded-For / X-Real-IP) для IP клиента.
+BEHIND_PROXY = _env_bool("RTK_BEHIND_PROXY", False)
+
+# Серверный режим: не выполнять сетевую проверку ключей облачных
+# моделей при старте (на VPS используется ЛОКАЛЬНАЯ модель, ключи
+# DeepSeek/GigaChat не нужны и могут отсутствовать).
+SKIP_KEY_CHECK = _env_bool("RTK_SKIP_KEY_CHECK", False)
+# Не выполнять сетевые проверки при самодиагностике ключей.
+CHECK_NETWORK = _env_bool("RTK_CHECK_NETWORK", True)
+
+# --- Лимит активных сессий и жизненный цикл (см. §5 ТЗ) ---
+# Максимум ОДНОВРЕМЕННО активных сессий: 3-й и далее видят заглушку
+# «нет свободной сессии». Два ключа ниже управляют автоматом:
+#   ACTIVE --IDLE_TIMEOUT сек без активности--> CHECK
+#   CHECK  --CHECK_TIMEOUT сек без ответа------> OFFLINE (слот освобождён)
+MAX_SESSIONS = _env_int("RTK_MAX_SESSIONS", 2)
+# Тишина, после которой сессия уходит «на проверку» (контрольный пинг).
+IDLE_TIMEOUT = _env_int("RTK_IDLE_TIMEOUT", 300)      # 5 мин
+# Срок ожидания ответа пользователя на контрольный пинг.
+CHECK_TIMEOUT = _env_int("RTK_CHECK_TIMEOUT", 60)      # 1 мин
+# Период фоновой очистки/переводов состояний (секунд).
+SESSION_GC_PERIOD = _env_int("RTK_SESSION_GC_PERIOD", 30)
+
+# --- Лимиты публичного доступа (см. §7 ТЗ) ---
+# Максимальная длина одного сообщения пользователя (символов).
+MAX_QUESTION_CHARS = _env_int("RTK_MAX_QUESTION_CHARS", 8000)
+# Максимальный размер JSON-тела запроса (байт) — защита от больших POST.
+MAX_BODY_BYTES = _env_int("RTK_MAX_BODY_BYTES", 256 * 1024)
+# Rate limit: запросов на IP за минуту (0 — выключить ограничение).
+RATE_LIMIT_PER_MIN = _env_int("RTK_RATE_LIMIT_PER_MIN", 10)
+
+# --- Локальный движок llama.cpp на VPS (§4 ТЗ) ---
+# Число слотов параллельной обработки (--parallel). По умолчанию 1.
+LOCAL_PARALLEL = _env_int("RTK_LOCAL_PARALLEL", 1)
+# Заголовок-ключ движка (--api-key). Пусто — без ключа.
+# На VPS задаётся: RTK_LOCAL_API_KEY=... (хранить в файле с правами 600).
 # --- ЛОКАЛЬНАЯ МОДЕЛЬ (llama.cpp / Ollama / LM Studio) ---
 # Блок подключения ЛОКАЛЬНОЙ модели: пользователь указывает КОРЕНЬ папки с
 # движком и моделями (напр. E:\Models\llama). Сервер:
