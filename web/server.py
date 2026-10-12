@@ -125,6 +125,8 @@ from rtk_app import config
 from rtk_app.agent import Agent
 from rtk_app import local_server
 from rtk_app.session_store import SessionStore
+from web import session_manager as session_mgr
+from web import rate_limit
 
 try:
     # MCP-клиент (опциональная зависимость): сервер проекта должен
@@ -168,6 +170,9 @@ class _ServerState:
     # Последний статус запущенного сервера (runtime).
     local_runtime = None
     local_lock = threading.Lock()
+
+    # VPS: реестр КЛИЕНТСКИХ сессий (лимит активных + автомат состояний).
+    _RTK_VPS_SESSIONS = session_mgr.get_manager()
 
 
 def _mcp_settings_file():
@@ -646,10 +651,126 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         """Единый агент (rtk_app.agent.Agent), созданный при старте сервера."""
         return _ServerState.agent
 
+    # Какая сессия обслуживает текущий запрос (sid из cookie).
+    _sid = None
+    _session_obj = None
+    # _RTK_VPS_SESSIONS2
+
     @property
     def session(self):
-        """Хранилище сессии диалога (rtk_app.session_store.SessionStore)."""
+        """Хранилище сессии ТЕКУЩЕГО клиента (по cookie sid).
+
+        Если запрос не привязан к клиентской сессии (например, служебные
+        вызовы), используется общая сессия — обратная совместимость.
+        """
+        if self._session_obj is not None:
+            return self._session_obj
         return _ensure_session()
+
+    def _client_ip(self):
+        """IP клиента: из X-Forwarded-For (за nginx) или из сокета."""
+        if getattr(config, "BEHIND_PROXY", False):
+            xff = self.headers.get("X-Forwarded-For")
+            if xff:
+                return xff.split(",")[0].strip()
+            xr = self.headers.get("X-Real-IP")
+            if xr:
+                return xr.strip()
+        return self.client_address[0] if self.client_address else "?"
+
+    def _rate_limited(self):
+        """Проверяет rate limit по IP. True — нужно отклонить (429)."""
+        if not getattr(config, "RATE_LIMIT_PER_MIN", 0):
+            return False
+        allowed, retry = rate_limit.get_limiter().check(self._client_ip())
+        if allowed:
+            return False
+        payload = b'{"ok": false, "error": "\xd0\xa1\xd0\xbb\xd0\xb8\xd1\x88\xd0\xba\xd0\xbe\xd0\xbc \xd1\x87\xd0\xb0\xd1\x81\xd1\x82\xd0\xbe \xd0\xb7\xd0\xb0\xd0\xbf\xd1\x80\xd0\xbe\xd1\x81\xd0\xbe\xd0\xb2. \xd0\x9f\xd0\xbe\xd0\xb2\xd1\x82\xd0\xbe\xd1\x80\xd0\xb8\xd1\x82\xd0\xb5 \xd0\xbf\xd0\xbe\xd0\xb7\xd0\xb6\xd0\xb5."}'
+        self.send_response(429)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Retry-After", str(retry))
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except Exception:
+            pass
+        return True
+
+    def _read_sid_cookie(self):
+        """Читает cookie sid из заголовка Cookie."""
+        raw = self.headers.get("Cookie", "")
+        for part in raw.split(";"):
+            kv = part.strip().split("=", 1)
+            if len(kv) == 2 and kv[0].strip() == "sid":
+                return kv[1].strip()
+        return None
+
+    def _resolve_session(self, is_activity=True, allow_new=True):
+        """Привязывает запрос к клиентской сессии по cookie sid.
+
+        Возвращает: "ok" (обслуживаем), "offline" (сессия отключена),
+        "full" (мест нет). Для новой сессии ставит self._pending_sid,
+        чтобы вызывающий обработчик отправил Set-Cookie.
+        """
+        if not getattr(config, "MAX_SESSIONS", 0):
+            self._session_obj = None
+            return "ok"
+        sid = self._read_sid_cookie()
+        if not allow_new and not sid:
+            self._session_obj = None
+            return "ok"
+        mgr = _ServerState._RTK_VPS_SESSIONS
+        kind, sess = mgr.touch(sid, is_activity=is_activity)
+        if kind in ("ok", "new") and sess is not None:
+            if kind == "new":
+                # sid мог быть сгенерирован менеджером (cookie не было).
+                self._sid = sess.sid
+                self._pending_sid = sess.sid
+            else:
+                self._sid = sid
+            self._session_obj = sess.store
+            return "ok"
+        # "full" или "offline": сессии нет.
+        self._sid = sid
+        self._session_obj = None
+        return kind
+
+    def _set_sid_cookie(self, sid):
+        self.send_header(
+            "Set-Cookie",
+            "sid=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400" % sid)
+
+    def _send_full(self):
+        """Заглушка «нет свободной сессии» (HTTP 503)."""
+        body = (
+            "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
+            "<meta http-equiv='refresh' content='15'>"
+            "<title>Нет свободной сессии</title>"
+            "<style>body{font-family:sans-serif;background:#1e1e1e;color:#eee;"
+            "display:flex;align-items:center;justify-content:center;height:100vh;"
+            "margin:0}div{max-width:440px;text-align:center;padding:24px}"
+            "a{color:#6cf}</style></head><body><div>"
+            "<h2>Сейчас занято</h2>"
+            "<p>Сервис ограничен (не более %d одновременных сессий). "
+            "Все места заняты — освободится через минуту или раньше.</p>"
+            "<p>Страница обновится автоматически. "
+            "<a href='/'>Повторить сейчас</a></p>"
+            "</div></body></html>"
+        ) % int(getattr(config, "MAX_SESSIONS", 2) or 2)
+        payload = body.encode("utf-8")
+        self.send_response(503)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Retry-After", "15")
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            self.wfile.write(payload)
+        except Exception:
+            pass
+
 
     def _send_bytes(self, status, body, content_type):
         if isinstance(body, str):
@@ -679,9 +800,33 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
     # ---------------- GET ----------------
     def do_GET(self):
+        # Привязка к клиентской сессии (cookie sid). /api/health и
+        # статика доступны всегда; прочие /api/* без слота получают 503.
+        import urllib.parse
+        p = urllib.parse.urlparse(self.path).path
+        if p.startswith("/api/") and p != "/api/health":
+            if self._rate_limited():
+                return
+            # /api/heartbeat — «тихий» (не продлевает сессию).
+            is_act = (p != "/api/heartbeat")
+            kind = self._resolve_session(is_activity=is_act, allow_new=True)
+            if kind == "full":
+                return self._send_json(503, {"ok": False,
+                    "error": "Нет свободной сессии.", "state": "full"})
+        if p == "/":
+            kind = self._resolve_session(is_activity=True, allow_new=True)
+            if kind == "full":
+                return self._send_full()
+        return self._do_GET()
+
+    def _do_GET(self):
         import urllib.parse
         path = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
         if path in ("/", "/index.html"):
+            # Новой клиентской сессии выдаём cookie sid до отправки.
+            if self._pending_sid:
+                self._cookie_to_set = self._pending_sid
+                self._pending_sid = None
             return self._serve_static_safe("index.html")
         if path.startswith(("/css/", "/js/")):
             return self._serve_static_safe(path.lstrip("/"))
@@ -693,6 +838,16 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             # Отдача ИЗОБРАЖЕНИЯ из хранилища RAG (встроенные картинки PDF) —
             # для блока «Фрагмент документа» в карточке ответа.
             return self._serve_rag_image(path[len("/images/"):])
+        if path == "/api/health":
+            info = _ServerState._RTK_VPS_SESSIONS.info()
+            return self._send_json(200, {
+                "ok": True, "service": "rtk-web",
+                "sessions": info,
+                "agent": bool(self.agent),
+            })
+        if path == "/api/heartbeat":
+            hb = _ServerState._RTK_VPS_SESSIONS.heartbeat(self._sid)
+            return self._send_json(200, {"ok": True, "session": hb})
         if path == "/api/model":
             return self._send_json(200, {
                 "ok": True,
@@ -729,6 +884,20 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"ok": False, "error": "Not Found"})
 
     def do_POST(self):
+        import urllib.parse
+        if self._rate_limited():
+            return
+        kind = self._resolve_session(is_activity=True, allow_new=True)
+        if kind == "full":
+            return self._send_json(503, {"ok": False,
+                "error": "Нет свободной сессии.", "state": "full"})
+        if kind == "offline":
+            return self._send_json(409, {"ok": False,
+                "error": "Сессия завершена. Откройте новую.",
+                "state": "offline"})
+        return self._do_POST()
+
+    def _do_POST(self):
         import urllib.parse
         if urllib.parse.urlparse(self.path).path == "/api/ask":
             return self._handle_ask()
@@ -774,6 +943,10 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         with open(full, "rb") as f:
             body = f.read()
         self.send_response(200)
+        ck = getattr(self, "_cookie_to_set", None)
+        if ck:
+            self._set_sid_cookie(ck)
+            self._cookie_to_set = None
         self.send_header("Content-Type", ctype or "application/octet-stream")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -1913,7 +2086,14 @@ def create_server(agent, host=None, port=None):
     # на общем порту config.WEB_PORT.
     addr = (host or config.WEB_HOST,
             config.WEB_PORT if port is None else port)
-    return ThreadingHTTPServer(addr, WebRequestHandler)
+    # allow_reuse_address - быстрый перезапуск (systemd restart) без ошибки
+    # Address already in use из-за TIME_WAIT; daemon_threads - фоновые потоки
+    # запросов не мешают остановке сервиса.
+    class _ReusableServer(ThreadingHTTPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    return _ReusableServer(addr, WebRequestHandler)
 
 
 def _open_browser_later(url, delay=1.0):
@@ -2005,6 +2185,14 @@ def serve(agent_or_key, host=None, port=None, open_page=True, agent=None):
         print("[LOCAL] не удалось подключить локальную модель: %s" % exc,
               flush=True)
 
+    # VPS: фоновый сборщик клиентских сессий (ACTIVE->CHECK->OFFLINE).
+    try:
+        import web.session_manager as _sm
+        _sm.get_manager()  # прогрев/создание реестра
+        _sm.start_gc_thread()
+    except Exception as _exc:
+        print("[SESSION] gc-поток не запущен: %s" % _exc, flush=True)
+
     httpd = create_server(agent, host, port)
     shown_host, shown_port = httpd.server_address[:2]
     url = "http://%s:%s/" % (shown_host, shown_port)
@@ -2019,7 +2207,9 @@ def serve(agent_or_key, host=None, port=None, open_page=True, agent=None):
         _ServerState.composition_running = False
         print("[COMPOSE] режим композиции не активен (работают отдельные "
               "серверы по выбору).", flush=True)
-    if open_page:
+    # На сервере (VPS) браузер не открываем: RTK_OPEN_BROWSER=0 ->
+    # config.OPEN_BROWSER. Локально поведение прежнее (по умолчанию True).
+    if open_page and getattr(config, "OPEN_BROWSER", True):
         _open_browser_later(url)
     print("[WEB] Остановка: нажмите Ctrl+C.")
     try:
