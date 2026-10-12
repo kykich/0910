@@ -15,6 +15,9 @@ import { bus, registry } from "./core/bus.js";
 import { esc, fmt } from "./core/dom.js";
 // Сетевой транспорт — общий модуль core/api.js.
 import { apiGet, apiPost } from "./core/api.js";
+// Сторож серверной сессии (VPS): лимит мест, диалог «Вы здесь?»,
+// read-only при завершении. См. docs/vps-llm-service.md §5.
+import { initSessionGuard } from "./features/sessionGuard.js";
 
 (function () {
     "use strict";
@@ -2634,4 +2637,7 @@ import { apiGet, apiPost } from "./core/api.js";
     bus.emit("app:ready", {});
 
     loadSession();
+
+    // Сторож сессии: следит за лимитом мест и завершением сессии.
+    initSessionGuard();
 })();

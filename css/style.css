@@ -1838,3 +1838,35 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     font-family: ui-monospace, Consolas, monospace;
     word-break: break-word;
 }
+
+/* --- Сторож серверной сессии (VPS): диалог «Вы здесь?» и read-only --- */
+.sg-overlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: rgba(10, 12, 16, .72);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+}
+.sg-overlay[hidden] { display: none; }
+.sg-box {
+    background: #1e2127; color: #e6e9ef;
+    border: 1px solid #333a45; border-radius: 12px;
+    max-width: 420px; width: 100%; padding: 22px 24px;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, .55);
+    text-align: center;
+}
+.sg-title { margin: 0 0 10px; font-size: 20px; }
+.sg-text { margin: 0 0 16px; line-height: 1.5; color: #b9c0cc; }
+.sg-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+.sg-actions button {
+    font: inherit; padding: 9px 16px; border-radius: 8px;
+    border: 1px solid #3a4250; background: #2a2f38; color: #e6e9ef;
+    cursor: pointer;
+}
+.sg-actions button.primary { background: #3b6cf6; border-color: #3b6cf6; }
+.sg-actions button:hover { filter: brightness(1.1); }
+.sg-countdown { margin-top: 12px; font-size: 13px; color: #8f97a6; min-height: 16px; }
+
+/* Режим «только чтение»: приглушаем поле ввода. */
+body.sg-readonly #question,
+body.sg-readonly #submit { opacity: .5; cursor: not-allowed; }
+

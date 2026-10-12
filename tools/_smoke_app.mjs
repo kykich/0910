@@ -88,6 +88,10 @@ try {
     console.log("SMOKE OK: app.js загрузился без ошибок инициализации");
     console.log("  registry.get('sections').refresh ->",
                 typeof reg.refresh);
+    // Модуль sessionGuard держит периодический таймер опроса /api/heartbeat —
+    // в браузере это правильно, но в smoke-среде он не даёт процессу выйти.
+    // Явно завершаем процесс после успешной проверки.
+    process.exit(0);
 } catch (e) {
     console.error("SMOKE FAIL:", e && e.stack ? e.stack : e);
     process.exitCode = 1;
