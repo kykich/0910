@@ -808,7 +808,11 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         import urllib.parse
         p = urllib.parse.urlparse(self.path).path
         if p.startswith("/api/") and p != "/api/health":
-            if self._rate_limited():
+            # Служебные «тихие» опросы (health/heartbeat) НЕ расходуют квоту
+            # rate limit: UI шлёт /api/heartbeat каждые 5 c (12/мин), что само
+            # по себе превышает дефолтный лимит и «съедало» квоту реальных
+            # запросов пользователя.
+            if p != "/api/heartbeat" and self._rate_limited():
                 return
             # /api/heartbeat — «тихий» (не продлевает сессию).
             is_act = (p != "/api/heartbeat")
