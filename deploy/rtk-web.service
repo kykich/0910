@@ -29,7 +29,7 @@ Environment=RTK_HOST=127.0.0.1
 Environment=RTK_PORT=8000
 Environment=RTK_BEHIND_PROXY=1
 Environment=RTK_OPEN_BROWSER=0
-Environment=RTK_MAX_SESSIONS=2
+Environment=RTK_MAX_SESSIONS=4
 Environment=RTK_IDLE_TIMEOUT=300
 Environment=RTK_CHECK_TIMEOUT=60
 # Rate limit НЕ задаём здесь: им управляет /etc/rtk/rtk-web.env
