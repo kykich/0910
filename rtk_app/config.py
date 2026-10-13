@@ -76,7 +76,12 @@ MAX_TOKENS_MAX = 100000         # верхняя граница (про запа
 MAX_TOKENS_STEP = 50            # шаг изменения в интерфейсе
 
 # --- Сессии диалога (история сохраняется на диск) ---
-SESSION_DIR = os.path.join(BASE_DIR, "session")
+# Папку можно вынести из репозитория через ENV RTK_SESSION_DIR. На VPS это
+# ВАЖНО: каталог задаётся в systemd (StateDirectory) и создаётся с нужным
+# владельцем автоматически — иначе git pull/ручное создание оставляют его
+# root:root, сервис (User=rtk) не может писать, сессии «залипают» и все
+# запросы получают 503 «Нет свободной сессии».
+SESSION_DIR = os.environ.get("RTK_SESSION_DIR") or os.path.join(BASE_DIR, "session")
 SESSION_FILE = os.path.join(SESSION_DIR, "session.json")
 
 # --- Сжатие истории диалога ---
