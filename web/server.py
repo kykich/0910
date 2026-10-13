@@ -2180,6 +2180,12 @@ def serve(agent_or_key, host=None, port=None, open_page=True, agent=None):
     if not isinstance(agent, Agent):
         agent = Agent(agent)
 
+    # ВАЖНО: запоминаем агента в состоянии СЕРВЕРА ДО синхронизации локальной
+    # модели — иначе _sync_agent_local() видит _ServerState.agent == None и
+    # молча выходит, и локальная модель (например, внешний llama-server на
+    # VPS) не попадает в состав источников агента.
+    _set_agent(agent)
+
     # ЛОКАЛЬНАЯ МОДЕЛЬ: если она была включена в прошлой сессии — добавляем
     # её источник в состав агента (появится в селекторе моделей).
     try:
