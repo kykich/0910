@@ -2043,13 +2043,17 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 return self._send_json(200, payload)
 
             if action == "stop":
+                # ВАЖНО: «Стоп» останавливает только НАШ подпроцесс сервера.
+                # Флаг enabled (подключать ли локальную модель к агенту) НЕ
+                # трогаем: на VPS llama-server может управляться ВНЕШНИМ
+                # systemd-сервисом, и остановка нашего процесса не должна
+                # «выключать» модель из селектора (иначе она безвозвратно
+                # пропадает до ручного включения). Отключение модели —
+                # отдельный явный переключатель (action="set", enabled). 
                 stopped = mgr.stop()
-                settings = mgr.load_settings()
-                settings["enabled"] = False
-                mgr.save_settings(settings)
                 _sync_agent_local()
-                print("[LOCAL] сервер остановлен (stopped=%s)." % stopped,
-                      flush=True)
+                print("[LOCAL] процесс сервера остановлен (stopped=%s)."
+                      % stopped, flush=True)
                 payload = _local_status_payload()
                 payload["stopped"] = stopped
                 return self._send_json(200, payload)
