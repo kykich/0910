@@ -657,6 +657,12 @@ class WebRequestHandler(BaseHTTPRequestHandler):
     # Какая сессия обслуживает текущий запрос (sid из cookie).
     _sid = None
     _session_obj = None
+    # НОВОЙ сессии нужно выставить Set-Cookie. Атрибуты ИНИЦИАЛИЗИРУЕМ на
+    # уровне класса: иначе, если запрос не привёл к созданию новой сессии
+    # (например, GET "/" при MAX_SESSIONS=0 или "ok" по существующему cookie),
+    # обращение к self._pending_sid в _do_GET падало с AttributeError -> 502.
+    _pending_sid = None
+    _cookie_to_set = None
     # _RTK_VPS_SESSIONS2
 
     @property
