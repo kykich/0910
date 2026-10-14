@@ -11,6 +11,13 @@
 *.json     text eol=lf
 *.md       text eol=lf
 
+# Скрипты для Linux ОБЯЗАНЫ быть с LF: CRLF ломает shebang (bash: bad
+# interpreter / \r: command not found). Сюда попадают любые shell-скрипты.
+*.sh       text eol=lf
+# Скрипты/юниты деплоя без расширения .sh тоже держим с LF (по eol в autodetect
+# они могут получить CRLF — для systemd/скриптов это критично).
+deploy/*   text eol=lf
+
 # Бинарные файлы не трогаем.
 *.png      binary
 *.jpg      binary
@@ -20,3 +27,4 @@
 *.pdf      binary
 *.tif      binary
 *.tiff     binary
+
